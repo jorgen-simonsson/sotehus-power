@@ -10,6 +10,7 @@ A real-time web dashboard for monitoring Swedish electricity spot prices and hou
 
 - **Real-Time Spot Prices**: Live electricity spot prices for all Swedish regions (SE1-SE4)
 - **Power Consumption Monitoring**: Real-time power usage via MQTT integration
+- **Solar Production Monitoring**: Real-time solar panel production via SolarEdge API
 - **Auto-Updating Interface**: UI refreshes every 3 seconds with latest data
 - **Multi-Client Support**: Clean handling of multiple browser connections without memory leaks
 - **Region Selection**: Easy switching between Swedish electricity regions
@@ -86,6 +87,34 @@ MQTT_PASSWORD=your_password
 MQTT_TOPIC=home/power/consumption
 ```
 
+### 3. Solar Production Data
+
+**Provider**: SolarEdge Monitoring API
+
+**API Endpoint**: `https://monitoringapi.solaredge.com`
+
+**Features**:
+- Real-time power production (Watts)
+- Daily, monthly, yearly energy totals
+- Power flow (PV → Grid, Battery, Load)
+- Battery status and charge level
+- System status and alerts
+
+**Authentication**: API Key required
+
+**Configuration**: Via environment variables (`.env` file)
+```bash
+SOLAREDGE_API_KEY=your_api_key_here
+SOLAREDGE_SITE_ID=your_site_id_here
+```
+
+**Data Retrieved**:
+- Current power production (W)
+- Energy produced today/month/year/lifetime (Wh)
+- Power flow between PV, grid, battery, and load
+- Battery charge level and status
+- Site information and installation details
+
 ## 🚀 Installation
 
 ### Prerequisites
@@ -113,10 +142,10 @@ MQTT_TOPIC=home/power/consumption
    pip install -r requirements.txt
    ```
 
-4. **Configure MQTT** (optional):
+4. **Configure MQTT & SolarEdge** (optional):
    ```bash
    cp .env.example .env
-   # Edit .env with your MQTT broker details
+   # Edit .env with your MQTT broker details and SolarEdge API credentials
    ```
 
 5. **Run the application**:
@@ -186,13 +215,16 @@ spot/
 │   ├── backend/                # Backend modules
 │   │   ├── spotprice.py       # Spot price API client
 │   │   ├── mqtt_client.py     # MQTT power monitoring
+│   │   ├── solar_edge.py      # SolarEdge solar production API
 │   │   └── README.md          # Module documentation
 │   └── frontend/              # Frontend web application
 │       ├── nicegui_app.py     # Main application file
 │       └── README.md          # Frontend-specific docs
+├── examples/
+│   └── solar_edge_example.py  # SolarEdge usage example
 ├── run_nicegui.py             # Launcher script
 ├── requirements.txt           # Python dependencies
-├── .env.example               # MQTT config template
+├── .env.example               # Configuration template
 └── README.md                  # This file
 ```
 
@@ -222,7 +254,36 @@ MQTT_PASSWORD=your_password
 MQTT_TOPIC=home/power
 ```
 
-### Update Frequency
+### SolarEdge Configuration
+
+To get your SolarEdge API credentials:
+
+1. **Log into SolarEdge Monitoring Portal**:
+   ```
+   https://monitoring.solaredge.com
+   ```
+
+2. **Generate API Key**:
+   - Go to **Admin** → **API Access**
+   - Read and accept the terms and conditions
+   - Click **Generate API Key**
+   - Copy the generated key
+
+3. **Find Site ID**:
+   - In your SolarEdge portal, the Site ID is visible in the URL
+   - Or go to **Site Admin** → **Site Details**
+   - Copy the Site ID number
+
+4. **Add to .env file**:
+   ```bash
+   SOLAREDGE_API_KEY=L4QLVQ1LOKCQX2193VSEICXW61NP6B1O
+   SOLAREDGE_SITE_ID=123456
+   ```
+
+5. **Test the integration**:
+   ```bash
+   python examples/solar_edge_example.py
+   ```
 
 To change the UI update frequency, modify the sleep duration in `src/frontend/nicegui_app.py`:
 

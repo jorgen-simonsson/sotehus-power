@@ -21,6 +21,20 @@ MQTT client for monitoring real-time power consumption.
 - Callback support for real-time updates
 - Automatic reconnection handling
 
+### `solar_edge.py`
+SolarEdge API client for fetching current solar panel production data.
+
+**Key Functions:**
+- `get_current_power_production()` - Get current power production in Watts
+- `get_current_power_flow()` - Get raw power flow data from API
+
+**Configuration Required:**
+Add to your `.env` file:
+```
+SOLAREDGE_API_KEY=your_api_key_here
+SOLAREDGE_SITE_ID=your_site_id_here
+```
+
 ## Usage
 
 Import these modules in the frontend application:
@@ -28,6 +42,7 @@ Import these modules in the frontend application:
 ```python
 from src.backend.spotprice import SpotPriceClient
 from src.backend.mqtt_client import MQTTPowerClient
+from src.backend.solar_edge import SolarEdgeClient
 ```
 
 ## Testing
