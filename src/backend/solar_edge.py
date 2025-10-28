@@ -91,9 +91,12 @@ class SolarEdgeClient:
             # Navigate through the JSON structure to get PV production
             site_current_power_flow = power_flow.get('siteCurrentPowerFlow', {})
             pv_data = site_current_power_flow.get('PV', {})
-            current_power = pv_data.get('currentPower', 0)
+            current_power_kw = pv_data.get('currentPower', 0)
             
-            return float(current_power)
+            # Convert from kW to W (API returns power in kW)
+            current_power_w = float(current_power_kw) * 1000
+            
+            return current_power_w
             
         except (KeyError, ValueError, TypeError) as e:
             print(f"Error parsing power production data: {e}")

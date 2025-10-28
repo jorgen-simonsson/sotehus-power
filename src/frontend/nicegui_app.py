@@ -14,6 +14,7 @@ import asyncio
 import threading
 from src.backend.spotprice import SpotPriceClient
 from src.backend.mqtt_client import MQTTPowerClient
+from src.backend.solar_edge import SolarEdgeClient
 
 
 # Global variable to store MQTT client instance
@@ -41,6 +42,12 @@ class SpotPriceDashboard:
         self.mqtt_error: str = ""
         self.power_last_updated: str = ""
         
+        # Solar power state
+        self.current_solar_power: Optional[float] = None
+        self.solar_error: str = ""
+        self.solar_last_updated: str = ""
+        self.solar_available: bool = False
+        
         # UI elements (will be set when building UI)
         self.price_label: Optional[ui.label] = None
         self.price_info_label: Optional[ui.label] = None
@@ -55,12 +62,16 @@ class SpotPriceDashboard:
         self.power_connecting_container: Optional[ui.element] = None
         self.power_data_container: Optional[ui.element] = None
         
+        self.solar_label: Optional[ui.label] = None
+        self.solar_status_label: Optional[ui.label] = None
+        self.solar_error_label: Optional[ui.label] = None
+        self.solar_updated_label: Optional[ui.label] = None
+        self.solar_data_container: Optional[ui.element] = None
+        
         # Initialize
         self.setup_mqtt()
         self.fetch_spot_price()
-        
-        # Start background update task
-        self.update_task = None
+        self.check_solar_availability()
     
     @classmethod
     def get_mqtt_client(cls) -> Optional[MQTTPowerClient]:
@@ -109,6 +120,45 @@ class SpotPriceDashboard:
             self.mqtt_connected = False
             self.mqtt_error = f"MQTT connection error: {str(e)}"
             print(f"MQTT exception: {e}")
+    
+    def check_solar_availability(self):
+        """Check if SolarEdge configuration is available"""
+        try:
+            client = SolarEdgeClient()
+            self.solar_available = True
+            self.solar_error = ""
+            print("SolarEdge configuration found")
+            # Try to fetch initial data
+            self.fetch_solar_power()
+        except ValueError as e:
+            self.solar_available = False
+            self.solar_error = "SolarEdge not configured"
+            print(f"SolarEdge not available: {e}")
+        except Exception as e:
+            self.solar_available = False
+            self.solar_error = f"SolarEdge error: {str(e)}"
+            print(f"SolarEdge exception: {e}")
+    
+    def fetch_solar_power(self):
+        """Fetch the current solar power production"""
+        if not self.solar_available:
+            return
+        
+        try:
+            client = SolarEdgeClient()
+            power = client.get_current_power_production()
+            if power is not None:
+                self.current_solar_power = round(power, 2)
+                self.solar_last_updated = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                self.solar_error = ""
+                print(f"Solar power updated: {power}W")
+            else:
+                self.solar_error = "No solar data available"
+        except Exception as e:
+            self.solar_error = f"Solar error: {str(e)}"
+            print(f"Solar fetch error: {e}")
+        
+        self.update_solar_ui()
     
     def fetch_spot_price(self):
         """Fetch the current spot price"""
@@ -198,11 +248,62 @@ class SpotPriceDashboard:
             self.power_updated_label.text = f"Last updated: {self.power_last_updated}" if self.power_last_updated else ""
             self.power_updated_label.visible = bool(self.power_last_updated)
     
+    def update_solar_ui(self):
+        """Update the solar power UI elements"""
+        if not self.solar_available:
+            if self.solar_data_container:
+                self.solar_data_container.visible = False
+            return
+        
+        if self.solar_data_container:
+            self.solar_data_container.visible = True
+        
+        if self.solar_label and self.current_solar_power is not None:
+            # Display in W if less than 1000W, otherwise in kW
+            if self.current_solar_power < 1000:
+                self.solar_label.text = f"{self.current_solar_power:.1f} W"
+                print(f"DEBUG: Updated solar UI label to {self.current_solar_power:.1f} W")
+            else:
+                power_kw = self.current_solar_power / 1000
+                self.solar_label.text = f"{power_kw:.2f} kW"
+                print(f"DEBUG: Updated solar UI label to {power_kw:.2f} kW")
+        elif self.solar_label is None:
+            print("DEBUG: solar_label is None")
+        elif self.current_solar_power is None:
+            print(f"DEBUG: current_solar_power is None")
+        
+        if self.solar_status_label:
+            if self.current_solar_power is not None:
+                if self.current_solar_power > 0:
+                    self.solar_status_label.text = "☀️ Producing power"
+                else:
+                    self.solar_status_label.text = "🌙 No production"
+            else:
+                self.solar_status_label.text = "❓ Status unknown"
+        
+        if self.solar_error_label:
+            self.solar_error_label.text = f"⚠️ {self.solar_error}" if self.solar_error else ""
+            self.solar_error_label.visible = bool(self.solar_error)
+        
+        if self.solar_updated_label:
+            self.solar_updated_label.text = f"Last updated: {self.solar_last_updated}" if self.solar_last_updated else ""
+            self.solar_updated_label.visible = bool(self.solar_last_updated)
+    
+    def start_background_updates(self):
+        """Start background updates using UI timers"""
+        # Timer for power consumption updates every 3 seconds
+        ui.timer(3.0, self.update_power_ui)
+        
+        # Timer for solar power updates every 60 seconds
+        if self.solar_available:
+            ui.timer(60.0, self.fetch_solar_power)
+            # Timer to update solar UI every 3 seconds (to keep UI responsive)
+            ui.timer(3.0, self.update_solar_ui)
+
     async def background_update_loop(self):
-        """Background task to update power data every 3 seconds"""
-        while True:
-            await asyncio.sleep(3)
-            self.update_power_ui()
+        """Background task to update power data every 3 seconds and solar data every minute"""
+        # This method is kept for compatibility but timers are used instead
+        pass
     
     def build_ui(self):
         """Build the user interface"""
@@ -226,7 +327,7 @@ class SpotPriceDashboard:
             # Power Consumption Section
             with ui.card().classes('w-full max-w-lg p-6 mt-4'):
                 with ui.column().classes('items-center gap-3'):
-                    ui.label('🏠 Current Power Consumption').classes('text-2xl font-semibold mb-4')
+                    ui.label('🏠 Grid Power Consumption').classes('text-2xl font-semibold mb-4')
                     
                     # Connecting state
                     with ui.column().classes('items-center gap-2') as self.power_connecting_container:
@@ -242,14 +343,29 @@ class SpotPriceDashboard:
                     self.power_status_label = ui.label('🟢 MQTT Connected').classes('text-sm text-green-600')
                     self.power_error_label = ui.label().classes('text-sm text-red-600')
                     self.power_updated_label = ui.label().classes('text-sm text-gray-600')
+            
+            # Solar Power Section
+            with ui.card().classes('w-full max-w-lg p-6 mt-4'):
+                with ui.column().classes('items-center gap-3'):
+                    ui.label('☀️ Solar Power Production').classes('text-2xl font-semibold mb-4')
+                    
+                    # Solar data display
+                    with ui.column().classes('items-center gap-1') as self.solar_data_container:
+                        self.solar_label = ui.label().classes('text-3xl font-bold text-yellow-600')
+                        ui.label('Current solar production')
+                    
+                    # Status labels
+                    self.solar_status_label = ui.label().classes('text-sm text-gray-600')
+                    self.solar_error_label = ui.label().classes('text-sm text-red-600')
+                    self.solar_updated_label = ui.label().classes('text-sm text-gray-600')
         
         # Initial UI update
         self.update_price_ui()
         self.update_power_ui()
+        self.update_solar_ui()
         
-        # Start background update task
-        if self.update_task is None:
-            self.update_task = asyncio.create_task(self.background_update_loop())
+        # Start background updates using timers
+        self.start_background_updates()
 
 
 # Create the dashboard instance
