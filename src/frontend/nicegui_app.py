@@ -8,7 +8,7 @@ and household power consumption.
 """
 
 from nicegui import ui
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, Dict, Any
 import asyncio
 import threading
@@ -23,6 +23,16 @@ _mqtt_client_instance: Optional[MQTTPowerClient] = None
 # Global variable to store latest power data (shared across all clients)
 _latest_power_data: Optional[Dict[str, Any]] = None
 _power_data_lock = threading.Lock()
+
+
+def get_current_time() -> datetime:
+    """Get current time with proper timezone handling (local time)"""
+    return datetime.now().astimezone()
+
+
+def format_timestamp(dt: datetime) -> str:
+    """Format datetime to string with timezone awareness"""
+    return dt.strftime("%Y-%m-%d %H:%M:%S")
 
 
 class SpotPriceDashboard:
@@ -100,7 +110,7 @@ class SpotPriceDashboard:
         with _power_data_lock:
             _latest_power_data = {
                 'power': round(power, 2),
-                'timestamp': datetime.now()
+                'timestamp': get_current_time()
             }
         print(f"MQTT received: {power}W, updated global data")
     
@@ -149,7 +159,7 @@ class SpotPriceDashboard:
             power = client.get_current_power_production()
             if power is not None:
                 self.current_solar_power = round(power, 2)
-                self.solar_last_updated = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                self.solar_last_updated = format_timestamp(get_current_time())
                 self.solar_error = ""
                 print(f"Solar power updated: {power}W")
             else:
@@ -171,7 +181,7 @@ class SpotPriceDashboard:
             price = client.get_current_price(self.region)
             if price is not None:
                 self.current_price = round(price, 2)
-                self.last_updated = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                self.last_updated = format_timestamp(get_current_time())
                 self.error_message = ""
             else:
                 self.error_message = "Could not fetch current spot price"
@@ -180,6 +190,26 @@ class SpotPriceDashboard:
         finally:
             self.loading = False
             self.update_price_ui()
+    
+    def check_and_refresh_spot_price(self):
+        """Check if we've crossed a 15-minute boundary and refresh spot price if needed"""
+        now = get_current_time()
+        current_minute = now.minute
+        
+        # Check if we're at a 15-minute boundary (0, 15, 30, 45)
+        if current_minute % 15 == 0:
+            # Only refresh if we haven't updated in the last minute
+            if self.last_updated:
+                last_update_time = datetime.strptime(self.last_updated, "%Y-%m-%d %H:%M:%S").astimezone()
+                time_since_update = (now - last_update_time).total_seconds()
+                
+                # Refresh if it's been more than 60 seconds
+                if time_since_update > 60:
+                    print(f"15-minute boundary detected, refreshing spot price")
+                    self.fetch_spot_price()
+            else:
+                # No previous update, fetch now
+                self.fetch_spot_price()
     
     def set_region(self, new_region: str):
         """Set the region and fetch new price"""
@@ -199,12 +229,8 @@ class SpotPriceDashboard:
                 self.price_label.visible = False
         
         if self.price_info_label:
-            if self.current_price is not None:
-                self.price_info_label.text = f"Current spot price for {self.region}"
-                self.price_info_label.visible = True
-            else:
-                self.price_info_label.text = "Click 'Refresh Price' to get current spot price"
-                self.price_info_label.visible = not self.loading
+            # Hide the info label to save space on mobile
+            self.price_info_label.visible = False
         
         if self.price_error_label:
             self.price_error_label.text = self.error_message
@@ -224,7 +250,7 @@ class SpotPriceDashboard:
         
         if latest_data:
             self.current_power = latest_data['power']
-            self.power_last_updated = latest_data['timestamp'].strftime("%Y-%m-%d %H:%M:%S")
+            self.power_last_updated = format_timestamp(latest_data['timestamp'])
             self.mqtt_error = ""
         
         # Update UI elements
@@ -294,11 +320,17 @@ class SpotPriceDashboard:
         # Timer for power consumption updates every 3 seconds
         ui.timer(3.0, self.update_power_ui)
         
+        # Timer for spot price UI updates every 3 seconds (updates timestamp)
+        ui.timer(3.0, self.update_price_ui)
+        
         # Timer for solar power updates every 60 seconds
         if self.solar_available:
             ui.timer(60.0, self.fetch_solar_power)
             # Timer to update solar UI every 3 seconds (to keep UI responsive)
             ui.timer(3.0, self.update_solar_ui)
+        
+        # Timer to check for 15-minute boundary and refresh spot price
+        ui.timer(30.0, self.check_and_refresh_spot_price)
 
     async def background_update_loop(self):
         """Background task to update power data every 3 seconds and solar data every minute"""
@@ -337,7 +369,6 @@ class SpotPriceDashboard:
                     # Connected state
                     with ui.column().classes('items-center gap-1') as self.power_data_container:
                         self.power_label = ui.label().classes('text-3xl font-bold text-orange-600')
-                        ui.label('Current power consumption')
                     
                     # Status labels
                     self.power_status_label = ui.label('🟢 MQTT Connected').classes('text-sm text-green-600')
@@ -352,7 +383,6 @@ class SpotPriceDashboard:
                     # Solar data display
                     with ui.column().classes('items-center gap-1') as self.solar_data_container:
                         self.solar_label = ui.label().classes('text-3xl font-bold text-yellow-600')
-                        ui.label('Current solar production')
                     
                     # Status labels
                     self.solar_status_label = ui.label().classes('text-sm text-gray-600')

@@ -7,12 +7,15 @@ WORKDIR /app
 # Set environment variables
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONPATH=/app
+    PYTHONPATH=/app \
+    TZ=Europe/Stockholm
 
-# Install system dependencies (if needed)
+# Install system dependencies (including tzdata for timezone support)
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     gcc \
+    tzdata \
+    && ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements file

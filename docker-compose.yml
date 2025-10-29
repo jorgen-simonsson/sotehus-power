@@ -11,11 +11,15 @@ services:
       # Add your environment variables here
       # You can also use .env file
       - PYTHONUNBUFFERED=1
+      - TZ=Europe/Stockholm
     env_file:
       - .env  # Optional: if you have a .env file with configuration
     volumes:
       # Mount code for development (comment out for production)
       - .:/app
+      # Mount timezone data from host
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
     restart: unless-stopped
     networks:
       - sotehus-network
