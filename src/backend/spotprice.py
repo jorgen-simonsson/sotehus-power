@@ -5,7 +5,6 @@ from datetime import datetime
 from dateutil import parser
 from typing import List, Dict, Any, Optional
 
-
 class SpotPriceClient:
     """
     A minimal client for fetching current electricity spot prices from elprisetjustnu.se

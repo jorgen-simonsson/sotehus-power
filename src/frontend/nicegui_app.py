@@ -24,7 +24,6 @@ _mqtt_client_instance: Optional[MQTTPowerClient] = None
 _latest_power_data: Optional[Dict[str, Any]] = None
 _power_data_lock = threading.Lock()
 
-
 def get_current_time() -> datetime:
     """Get current time with proper timezone handling (local time)"""
     return datetime.now().astimezone()
@@ -33,7 +32,6 @@ def get_current_time() -> datetime:
 def format_timestamp(dt: datetime) -> str:
     """Format datetime to string with timezone awareness"""
     return dt.strftime("%Y-%m-%d %H:%M:%S")
-
 
 class SpotPriceDashboard:
     """Main dashboard class for managing spot price and power monitoring"""
@@ -359,7 +357,7 @@ class SpotPriceDashboard:
             # Power Consumption Section
             with ui.card().classes('w-full max-w-lg p-6 mt-4'):
                 with ui.column().classes('items-center gap-3'):
-                    ui.label('🏠 Grid Power Consumption').classes('text-2xl font-semibold mb-4')
+                    ui.label('🏠 Grid Consumption').classes('text-2xl font-semibold mb-4')
                     
                     # Connecting state
                     with ui.column().classes('items-center gap-2') as self.power_connecting_container:
@@ -378,7 +376,7 @@ class SpotPriceDashboard:
             # Solar Power Section
             with ui.card().classes('w-full max-w-lg p-6 mt-4'):
                 with ui.column().classes('items-center gap-3'):
-                    ui.label('☀️ Solar Power Production').classes('text-2xl font-semibold mb-4')
+                    ui.label('☀️ Solar Production').classes('text-2xl font-semibold mb-4')
                     
                     # Solar data display
                     with ui.column().classes('items-center gap-1') as self.solar_data_container:
