@@ -102,6 +102,10 @@ MQTT_TOPIC=home/power/consumption
 
 **Authentication**: API Key required
 
+**Rate Limits**:
+- 300 API calls per day per API key
+- Dashboard updates every 60 seconds to stay within limits
+
 **Configuration**: Via environment variables (`.env` file)
 ```bash
 SOLAREDGE_API_KEY=your_api_key_here
@@ -109,11 +113,57 @@ SOLAREDGE_SITE_ID=your_site_id_here
 ```
 
 **Data Retrieved**:
-- Current power production (W)
-- Energy produced today/month/year/lifetime (Wh)
-- Power flow between PV, grid, battery, and load
-- Battery charge level and status
-- Site information and installation details
+- **Current Power Production**: Live power output in Watts (W) or kilowatts (kW)
+- **Production Status**: Visual indicators for production state (producing/idle)
+- **Energy Totals**: Daily, monthly, yearly, and lifetime energy production
+- **Power Flow**: Real-time flow between PV panels, grid, battery, and household load
+- **Battery Information**: Charge level, charging/discharging status
+- **System Status**: Inverter status, alerts, and system health
+
+**API Endpoints Used**:
+```
+GET /site/{siteId}/currentPowerFlow.json
+GET /site/{siteId}/overview.json
+GET /site/{siteId}/details.json
+```
+
+**Response Example** (Current Power Flow):
+```json
+{
+  "siteCurrentPowerFlow": {
+    "PV": {
+      "currentPower": 2847.0,
+      "status": "Active"
+    },
+    "LOAD": {
+      "currentPower": 1580.5,
+      "status": "Active"
+    },
+    "GRID": {
+      "currentPower": -1266.5,
+      "status": "Active"
+    },
+    "STORAGE": {
+      "currentPower": 0,
+      "chargeLevel": 85,
+      "status": "Idle"
+    }
+  }
+}
+```
+
+**Display Format**:
+- Power < 1000W: Displayed as "XXX.X W"
+- Power ≥ 1000W: Displayed as "X.XX kW"
+- Status Icons:
+  - ☀️ Producing power (> 0W)
+  - 🌙 No production (0W)
+  - ❓ Status unknown (no data)
+
+**Auto-Configuration**:
+- If SolarEdge credentials are not provided, the solar panel section is automatically hidden
+- No errors shown if SolarEdge is not configured (optional feature)
+- Graceful degradation - app works fine without solar monitoring
 
 ## 🚀 Installation
 
@@ -182,7 +232,20 @@ The dashboard is divided into three main sections:
 - **Last Updated Timestamp**: Shows when the last power reading was received
 - **Reconnection**: Automatic retry on connection loss
 
-#### 3. **Information Section**
+#### 3. **Solar Production Section** (Optional)
+- **Real-Time Display**: Current solar power production in Watts (W) or kilowatts (kW)
+- **Production Status**:
+  - ☀️ Producing power (when panels are generating electricity)
+  - 🌙 No production (nighttime or cloudy conditions)
+  - ❓ Status unknown (if data unavailable)
+- **Auto-Updates**: Refreshes every 60 seconds (respects API rate limits)
+- **Last Updated Timestamp**: Shows when the last solar reading was received
+- **Auto-Hide**: Section is hidden if SolarEdge is not configured
+- **Smart Display**:
+  - Shows power in W for values < 1000W
+  - Shows power in kW for values ≥ 1000W
+
+#### 4. **Information Section**
 - **About**: Description of the service and data source
 - **Region Guide**: Explains which region corresponds to which area in Sweden
 - **Helpful Tips**: Usage information and context
@@ -256,34 +319,163 @@ MQTT_TOPIC=home/power
 
 ### SolarEdge Configuration
 
-To get your SolarEdge API credentials:
+To enable solar production monitoring, you'll need SolarEdge API credentials:
 
-1. **Log into SolarEdge Monitoring Portal**:
-   ```
-   https://monitoring.solaredge.com
-   ```
+#### Step 1: Log into SolarEdge Monitoring Portal
 
-2. **Generate API Key**:
-   - Go to **Admin** → **API Access**
-   - Read and accept the terms and conditions
-   - Click **Generate API Key**
-   - Copy the generated key
+Visit the SolarEdge monitoring website:
+```
+https://monitoring.solaredge.com
+```
 
-3. **Find Site ID**:
-   - In your SolarEdge portal, the Site ID is visible in the URL
-   - Or go to **Site Admin** → **Site Details**
-   - Copy the Site ID number
+Log in with your SolarEdge account credentials.
 
-4. **Add to .env file**:
-   ```bash
-   SOLAREDGE_API_KEY=L4QLVQ1LOKCQX2193VSEICXW61NP6B1O
-   SOLAREDGE_SITE_ID=123456
-   ```
+#### Step 2: Generate API Key
 
-5. **Test the integration**:
-   ```bash
-   python examples/solar_edge_example.py
-   ```
+1. Navigate to **Admin** → **Site Access** → **API Access**
+2. Read and accept the API Terms and Conditions
+3. Click **Generate API Key**
+4. **Important**: Copy the API key immediately - you won't be able to see it again!
+
+**Example API Key format**: `L4QLVQ1LOKCQX2193VSEICXW61NP6B1O`
+
+#### Step 3: Find Your Site ID
+
+Your Site ID can be found in multiple ways:
+
+**Method 1 - From URL**:
+- When logged into the SolarEdge portal, check the URL bar
+- The URL will look like: `https://monitoring.solaredge.com/solaredge-web/p/site/123456`
+- The number at the end is your Site ID
+
+**Method 2 - From Site Details**:
+- Go to **Admin** → **Site Details**
+- The Site ID is displayed at the top of the page
+
+**Example Site ID**: `123456` (numeric value)
+
+#### Step 4: Add Credentials to .env File
+
+Create or edit the `.env` file in the project root:
+
+```bash
+# SolarEdge API Configuration
+SOLAREDGE_API_KEY=L4QLVQ1LOKCQX2193VSEICXW61NP6B1O
+SOLAREDGE_SITE_ID=123456
+```
+
+#### Step 5: Test the Integration
+
+Run the example script to verify your credentials work:
+
+```bash
+python examples/solar_edge_example.py
+```
+
+Expected output:
+```
+SolarEdge Site: My House
+Current Power: 2847.0 W
+Status: Active
+Last Update: 2025-10-29 14:30:00
+```
+
+#### Step 6: Start the Dashboard
+
+```bash
+python run_nicegui.py
+```
+
+The solar production section will now appear on the dashboard with live data!
+
+### Understanding SolarEdge API Limits
+
+**Rate Limit**: 300 API calls per day per API key
+
+**Dashboard Behavior**:
+- Solar data updates every **60 seconds** (1 call per minute)
+- This equals 1,440 calls per day
+- To stay within limits, the dashboard makes calls only when needed
+- Power consumption and spot price updates are independent (no API calls)
+
+**Best Practices**:
+- Don't run multiple instances with the same API key
+- Avoid running test scripts continuously
+- Monitor your API usage in the SolarEdge portal
+
+### SolarEdge API Troubleshooting
+
+#### Problem: "SolarEdge not configured"
+
+**Solution**:
+- This is normal if you haven't added credentials to `.env`
+- The solar section will be hidden, and the app works fine without it
+- Add credentials following the steps above to enable solar monitoring
+
+#### Problem: "Solar error: API authentication failed"
+
+**Solutions**:
+- Verify API key is correct (check for typos, extra spaces)
+- Ensure Site ID is a number (no quotes needed in .env)
+- Regenerate API key if expired or compromised
+- Check that your SolarEdge account has API access enabled
+
+#### Problem: "No solar data available"
+
+**Solutions**:
+- Verify your solar system is online in the SolarEdge portal
+- Check that inverter is communicating (may take 15-20 minutes after sunset/sunrise)
+- Ensure Site ID matches your installation
+- Try running the example script to test API access directly
+
+#### Problem: Solar power shows 0W during daytime
+
+**Solutions**:
+- Check inverter status in SolarEdge portal
+- Inverter may be in standby mode (normal in very low light)
+- Verify panels are not shaded or covered
+- Check for system alerts in SolarEdge portal
+- Wait 5-10 minutes - data may be delayed
+
+### Optional: Disable SolarEdge
+
+If you don't have solar panels or don't want solar monitoring:
+
+**Simply don't add the SolarEdge variables to your `.env` file.**
+
+The dashboard will automatically:
+- Hide the solar production section
+- Continue working normally with spot prices and power consumption
+- Show no errors related to solar monitoring
+
+### SolarEdge Data Privacy
+
+**What data is accessed**:
+- Only your solar site's production data
+- No personal information
+- No account credentials (only API key)
+
+**Data security**:
+- API key stored locally in `.env` file
+- Never transmitted except to SolarEdge servers
+- Keep your `.env` file private (already in `.gitignore`)
+
+### Advanced: Multiple Sites
+
+If you have multiple SolarEdge installations:
+
+**Option 1**: Create separate `.env` files and run multiple instances:
+```bash
+# Site 1
+SOLAREDGE_API_KEY=key1
+SOLAREDGE_SITE_ID=123456
+
+# Site 2  
+SOLAREDGE_API_KEY=key2
+SOLAREDGE_SITE_ID=789012
+```
+
+**Option 2**: Modify `solar_edge.py` to support multiple sites (requires code changes)
 
 To change the UI update frequency, modify the sleep duration in `src/frontend/nicegui_app.py`:
 
