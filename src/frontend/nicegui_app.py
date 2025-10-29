@@ -371,7 +371,6 @@ class SpotPriceDashboard:
 # Create the dashboard instance
 dashboard = SpotPriceDashboard()
 
-
 @ui.page('/')
 def index():
     """Main page"""
