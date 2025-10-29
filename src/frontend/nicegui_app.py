@@ -376,7 +376,6 @@ def index():
     """Main page"""
     dashboard.build_ui()
 
-
 if __name__ in {"__main__", "__mp_main__"}:
     # Run the NiceGUI app
     ui.run(
