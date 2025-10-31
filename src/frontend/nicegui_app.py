@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from typing import Optional, Dict, Any
 import asyncio
 import threading
+from asyncio import get_running_loop, new_event_loop, set_event_loop
 from src.backend.spotprice import SpotPriceClient
 from src.backend.mqtt_client import MQTTPowerClient
 from src.backend.solar_edge import SolarEdgeClient
@@ -80,30 +81,36 @@ class SpotPriceDashboard:
         self.setup_mqtt()
         self.fetch_spot_price()
         self.check_solar_availability()
+        
+        # Track the last update time
+        self.last_price_update: Optional[datetime] = None  
+
+        # Start background updates
+        self.start_background_updates()
     
     @classmethod
-    def get_mqtt_client(cls) -> Optional[MQTTPowerClient]:
+    def get_mqtt_client(cls, dashboard_instance=None) -> Optional[MQTTPowerClient]:
         """Get or create the MQTT client instance."""
         global _mqtt_client_instance
-        
+
         if _mqtt_client_instance is None:
             try:
                 _mqtt_client_instance = MQTTPowerClient()
                 # Set the callback to update global data
                 def callback(power: float):
-                    cls.power_update_callback_static(power)
+                    cls.power_update_callback_static(power, dashboard_instance)
                 _mqtt_client_instance.set_power_callback(callback)
             except Exception as e:
                 print(f"MQTT config error: {str(e)}")
                 return None
-        
+
         return _mqtt_client_instance
-    
+
     @classmethod
-    def power_update_callback_static(cls, power: float) -> None:
+    def power_update_callback_static(cls, power: float, dashboard_instance: Optional['SpotPriceDashboard'] = None) -> None:
         """Static callback for MQTT power updates."""
         global _latest_power_data, _power_data_lock
-        
+
         # Update the global shared power data
         with _power_data_lock:
             _latest_power_data = {
@@ -111,11 +118,15 @@ class SpotPriceDashboard:
                 'timestamp': get_current_time()
             }
         print(f"MQTT received: {power}W, updated global data")
+
+        # Trigger UI update if dashboard instance is provided
+        if dashboard_instance:
+            dashboard_instance.update_power_ui()
     
     def setup_mqtt(self):
         """Initialize MQTT connection"""
         try:
-            client = self.get_mqtt_client()
+            client = self.get_mqtt_client(self)  # Pass the dashboard instance
             if client and client.connect():
                 self.mqtt_connected = True
                 self.mqtt_error = ""
@@ -169,26 +180,17 @@ class SpotPriceDashboard:
         self.update_solar_ui()
     
     def fetch_spot_price(self):
-        """Fetch the current spot price"""
-        self.loading = True
-        self.error_message = ""
-        self.update_price_ui()
-        
+        """Fetch the latest spot price from the API"""
         try:
-            client = SpotPriceClient()
-            price = client.get_current_price(self.region)
-            if price is not None:
-                self.current_price = round(price, 2)
-                self.last_updated = format_timestamp(get_current_time())
-                self.error_message = ""
-            else:
-                self.error_message = "Could not fetch current spot price"
+            spot_price_client = SpotPriceClient()
+            self.current_price = spot_price_client.get_current_price()
+            self.last_price_update = get_current_time()
+            self.last_updated = format_timestamp(self.last_price_update)  # Update last_updated
+            print(f"Spot price updated: {self.current_price} at {self.last_price_update}")
+            self.update_price_ui()  # Ensure UI is updated
         except Exception as e:
-            self.error_message = f"Error: {str(e)}"
-        finally:
-            self.loading = False
-            self.update_price_ui()
-    
+            print(f"Error fetching spot price: {e}")
+
     def check_and_refresh_spot_price(self):
         """Check if we've crossed a 15-minute boundary and refresh spot price if needed"""
         now = get_current_time()
@@ -314,27 +316,20 @@ class SpotPriceDashboard:
             self.solar_updated_label.visible = bool(self.solar_last_updated)
     
     def start_background_updates(self):
-        """Start background updates using UI timers"""
-        # Timer for power consumption updates every 3 seconds
-        ui.timer(3.0, self.update_power_ui)
-        
-        # Timer for spot price UI updates every 3 seconds (updates timestamp)
-        ui.timer(3.0, self.update_price_ui)
-        
-        # Timer for solar power updates every 60 seconds
-        if self.solar_available:
-            ui.timer(60.0, self.fetch_solar_power)
-            # Timer to update solar UI every 3 seconds (to keep UI responsive)
-            ui.timer(3.0, self.update_solar_ui)
-        
-        # Timer to check for 15-minute boundary and refresh spot price
-        ui.timer(30.0, self.check_and_refresh_spot_price)
-
-    async def background_update_loop(self):
-        """Background task to update power data every 3 seconds and solar data every minute"""
-        # This method is kept for compatibility but timers are used instead
-        pass
+        """Start the background task for periodic updates."""
+        try:
+            loop = get_running_loop()
+        except RuntimeError:
+            loop = new_event_loop()
+            set_event_loop(loop)
+        loop.create_task(self.background_update_loop())
     
+    async def background_update_loop(self):
+        """Background task to update spot price every hour"""
+        while True:
+            await asyncio.sleep(3600)  # Wait for 1 hour
+            self.fetch_spot_price()
+
     def build_ui(self):
         """Build the user interface"""
         with ui.column().classes('w-full items-center p-8 gap-4'):
@@ -370,8 +365,8 @@ class SpotPriceDashboard:
                     
                     # Status labels
                     self.power_status_label = ui.label('🟢 MQTT Connected').classes('text-sm text-green-600')
-                    self.power_error_label = ui.label().classes('text-sm text-red-600')
-                    self.power_updated_label = ui.label().classes('text-sm text-gray-600')
+                    self.power_error_label = ui.label('🟢 MQTT Connected').classes('text-sm text-red-600')
+                    self.power_updated_label = ui.label('🟢 MQTT Connected').classes('text-sm text-gray-600')
             
             # Solar Power Section
             with ui.card().classes('w-full max-w-lg p-6 mt-4'):
