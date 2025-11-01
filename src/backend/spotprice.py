@@ -68,8 +68,8 @@ class SpotPriceClient:
             print("No price data provided")
             return None
         
-        # Get current system time
-        current_time: datetime = datetime.now()
+        # Get current system time with timezone awareness
+        current_time: datetime = datetime.now().astimezone()
         
         # Find the price entry that covers the current time
         for entry in price_data:
@@ -79,7 +79,7 @@ class SpotPriceClient:
                 time_end: datetime = parser.parse(entry['time_end'])
                 
                 # Convert current time to the same timezone as the data
-                current_time_tz: datetime = current_time.replace(tzinfo=time_start.tzinfo)
+                current_time_tz: datetime = current_time.astimezone(time_start.tzinfo)
                 
                 # Check if current time falls within this price period
                 if time_start <= current_time_tz < time_end:

@@ -325,10 +325,26 @@ class SpotPriceDashboard:
         loop.create_task(self.background_update_loop())
     
     async def background_update_loop(self):
-        """Background task to update spot price every hour"""
+        """Background task to update spot price and solar power periodically"""
         while True:
-            await asyncio.sleep(3600)  # Wait for 1 hour
-            self.fetch_spot_price()
+            await asyncio.sleep(60)  # Wait for 1 minute
+            
+            # Update solar power every minute
+            if self.solar_available:
+                self.fetch_solar_power()
+            
+            # Update spot price when crossing 15-minute boundaries (0, 15, 30, 45)
+            now = get_current_time()
+            current_quarter = now.minute // 15  # 0, 1, 2, or 3
+            
+            if self.last_price_update is None:
+                # First update
+                self.fetch_spot_price()
+            else:
+                last_quarter = self.last_price_update.minute // 15
+                # Check if we've crossed into a new 15-minute period
+                if current_quarter != last_quarter or now.hour != self.last_price_update.hour:
+                    self.fetch_spot_price()
 
     def build_ui(self):
         """Build the user interface"""
