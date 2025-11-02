@@ -84,6 +84,7 @@ class SpotPriceDashboard:
         
         # Track the last update time
         self.last_price_update: Optional[datetime] = None  
+        self.last_solar_update: Optional[datetime] = None  # Track last solar update
 
         # Start background updates
         self.start_background_updates()
@@ -169,6 +170,7 @@ class SpotPriceDashboard:
             if power is not None:
                 self.current_solar_power = round(power, 2)
                 self.solar_last_updated = format_timestamp(get_current_time())
+                self.last_solar_update = get_current_time()  # Track update time
                 self.solar_error = ""
                 print(f"Solar power updated: {power}W")
             else:
@@ -329,9 +331,15 @@ class SpotPriceDashboard:
         while True:
             await asyncio.sleep(60)  # Wait for 1 minute
             
-            # Update solar power every minute
+            # Update solar power every 10 minutes (to avoid rate limiting)
             if self.solar_available:
-                self.fetch_solar_power()
+                now = get_current_time()
+                if self.last_solar_update is None:
+                    self.fetch_solar_power()
+                else:
+                    minutes_since_update = (now - self.last_solar_update).total_seconds() / 60
+                    if minutes_since_update >= 10:
+                        self.fetch_solar_power()
             
             # Update spot price when crossing 15-minute boundaries (0, 15, 30, 45)
             now = get_current_time()
