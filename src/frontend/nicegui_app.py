@@ -7,12 +7,14 @@ Real-time web dashboard for monitoring Swedish electricity spot prices
 and household power consumption.
 """
 
-from nicegui import ui
-from datetime import datetime, timezone
+from nicegui import ui, app
+from datetime import datetime, timezone, timedelta
 from typing import Optional, Dict, Any
 import asyncio
 import threading
 from asyncio import get_running_loop, new_event_loop, set_event_loop
+from astral import LocationInfo
+from astral.sun import sun
 from src.backend.spotprice import SpotPriceClient
 from src.backend.mqtt_client import MQTTPowerClient
 from src.backend.solar_edge import SolarEdgeClient
@@ -25,6 +27,10 @@ _mqtt_client_instance: Optional[MQTTPowerClient] = None
 _latest_power_data: Optional[Dict[str, Any]] = None
 _power_data_lock = threading.Lock()
 
+# Global counter for connected clients
+_connected_clients = 0
+_clients_lock = threading.Lock()
+
 def get_current_time() -> datetime:
     """Get current time with proper timezone handling (local time)"""
     return datetime.now().astimezone()
@@ -33,6 +39,76 @@ def get_current_time() -> datetime:
 def format_timestamp(dt: datetime) -> str:
     """Format datetime to string with timezone awareness"""
     return dt.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def is_sun_up() -> bool:
+    """
+    Check if the sun is currently up in Sweden (SE4 region - Stockholm area)
+    Returns True if it's daytime, False otherwise
+    """
+    try:
+        # Stockholm coordinates (representative for SE4)
+        location = LocationInfo("Stockholm", "Sweden", "Europe/Stockholm", 59.3293, 18.0686)
+        
+        # Get today's sun times
+        now = get_current_time()
+        s = sun(location.observer, date=now.date(), tzinfo=now.tzinfo)
+        
+        sunrise = s['sunrise']
+        sunset = s['sunset']
+        
+        # Check if current time is between sunrise and sunset
+        return sunrise <= now <= sunset
+    except Exception as e:
+        print(f"Error calculating sun position: {e}")
+        # Default to daytime hours (6 AM - 8 PM) as fallback
+        hour = get_current_time().hour
+        return 6 <= hour <= 20
+
+
+def calculate_solar_update_interval(max_daily_calls: int = 300, usage_percent: float = 0.9) -> int:
+    """
+    Calculate the optimal interval between solar API calls during daylight hours.
+    
+    Args:
+        max_daily_calls: Maximum API calls allowed per day (default: 300)
+        usage_percent: Percentage of available calls to use (default: 0.9 for 90%)
+    
+    Returns:
+        Interval in minutes between API calls
+    """
+    try:
+        # Stockholm coordinates
+        location = LocationInfo("Stockholm", "Sweden", "Europe/Stockholm", 59.3293, 18.0686)
+        
+        # Get today's sun times
+        now = get_current_time()
+        s = sun(location.observer, date=now.date(), tzinfo=now.tzinfo)
+        
+        sunrise = s['sunrise']
+        sunset = s['sunset']
+        
+        # Calculate daylight duration in minutes
+        daylight_minutes = (sunset - sunrise).total_seconds() / 60
+        
+        # Calculate allowed calls (90% of max)
+        allowed_calls = int(max_daily_calls * usage_percent)
+        
+        # Calculate interval in minutes
+        interval_minutes = daylight_minutes / allowed_calls
+        
+        # Ensure minimum interval of 5 minutes to be safe
+        interval_minutes = max(5, interval_minutes)
+        
+        print(f"Solar update interval calculated: {interval_minutes:.1f} minutes "
+              f"({allowed_calls} calls over {daylight_minutes/60:.1f} hours of daylight)")
+        
+        return int(interval_minutes)
+        
+    except Exception as e:
+        print(f"Error calculating update interval: {e}")
+        # Default to 10 minutes as fallback
+        return 10
 
 class SpotPriceDashboard:
     """Main dashboard class for managing spot price and power monitoring"""
@@ -56,6 +132,7 @@ class SpotPriceDashboard:
         self.solar_error: str = ""
         self.solar_last_updated: str = ""
         self.solar_available: bool = False
+        self.solar_update_interval: int = 10  # Will be calculated dynamically
         
         # UI elements (will be set when building UI)
         self.price_label: Optional[ui.label] = None
@@ -85,6 +162,10 @@ class SpotPriceDashboard:
         # Track the last update time
         self.last_price_update: Optional[datetime] = None  
         self.last_solar_update: Optional[datetime] = None  # Track last solar update
+        
+        # Calculate optimal solar update interval
+        if self.solar_available:
+            self.solar_update_interval = calculate_solar_update_interval()
 
         # Start background updates
         self.start_background_updates()
@@ -328,21 +409,38 @@ class SpotPriceDashboard:
     
     async def background_update_loop(self):
         """Background task to update spot price and solar power periodically"""
+        last_interval_update = None
+        
         while True:
-            await asyncio.sleep(60)  # Wait for 1 minute
+            await asyncio.sleep(60)  # Check every 1 minute
             
-            # Update solar power every 10 minutes (to avoid rate limiting)
-            if self.solar_available:
-                now = get_current_time()
+            # Get connected clients count
+            global _connected_clients
+            with _clients_lock:
+                has_clients = _connected_clients > 0
+            
+            # Recalculate solar update interval daily (at midnight or on first run)
+            now = get_current_time()
+            if last_interval_update is None or now.date() != last_interval_update.date():
+                if self.solar_available:
+                    self.solar_update_interval = calculate_solar_update_interval()
+                    last_interval_update = now
+            
+            # Update solar power with optimizations:
+            # 1. Only if solar is available
+            # 2. Only if sun is up
+            # 3. Only if clients are connected
+            # 4. Using adaptive interval based on API limits
+            if self.solar_available and has_clients and is_sun_up():
                 if self.last_solar_update is None:
+                    # First update
                     self.fetch_solar_power()
                 else:
                     minutes_since_update = (now - self.last_solar_update).total_seconds() / 60
-                    if minutes_since_update >= 10:
+                    if minutes_since_update >= self.solar_update_interval:
                         self.fetch_solar_power()
             
             # Update spot price when crossing 15-minute boundaries (0, 15, 30, 45)
-            now = get_current_time()
             current_quarter = now.minute // 15  # 0, 1, 2, or 3
             
             if self.last_price_update is None:
@@ -419,9 +517,26 @@ class SpotPriceDashboard:
 dashboard = SpotPriceDashboard()
 
 @ui.page('/')
-def index():
-    """Main page"""
+async def index():
+    """Main page with client tracking"""
+    global _connected_clients
+    
+    # Increment connected clients counter
+    with _clients_lock:
+        _connected_clients += 1
+        print(f"Client connected. Total clients: {_connected_clients}")
+    
+    # Build the UI
     dashboard.build_ui()
+    
+    # Register cleanup on client disconnect
+    async def on_disconnect():
+        global _connected_clients
+        with _clients_lock:
+            _connected_clients = max(0, _connected_clients - 1)
+            print(f"Client disconnected. Total clients: {_connected_clients}")
+    
+    app.on_disconnect(on_disconnect)
 
 if __name__ in {"__main__", "__mp_main__"}:
     # Run the NiceGUI app
