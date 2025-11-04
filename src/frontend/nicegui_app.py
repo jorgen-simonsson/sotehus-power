@@ -11,25 +11,12 @@ from nicegui import ui, app
 from datetime import datetime, timezone, timedelta
 from typing import Optional, Dict, Any
 import asyncio
-import threading
 from asyncio import get_running_loop, new_event_loop, set_event_loop
-from astral import LocationInfo
-from astral.sun import sun
 from src.backend.spotprice import SpotPriceClient
 from src.backend.mqtt_client import MQTTPowerClient
-from src.backend.solar_edge import SolarEdgeClient
+from src.backend.solar_edge import SolarEdgeClient, is_sun_up, calculate_solar_update_interval
+from src.application.data_manager import DataManager
 
-
-# Global variable to store MQTT client instance
-_mqtt_client_instance: Optional[MQTTPowerClient] = None
-
-# Global variable to store latest power data (shared across all clients)
-_latest_power_data: Optional[Dict[str, Any]] = None
-_power_data_lock = threading.Lock()
-
-# Global counter for connected clients
-_connected_clients = 0
-_clients_lock = threading.Lock()
 
 def get_current_time() -> datetime:
     """Get current time with proper timezone handling (local time)"""
@@ -40,80 +27,26 @@ def format_timestamp(dt: datetime) -> str:
     """Format datetime to string with timezone awareness"""
     return dt.strftime("%Y-%m-%d %H:%M:%S")
 
-
-def is_sun_up() -> bool:
-    """
-    Check if the sun is currently up in Sweden (SE4 region - Stockholm area)
-    Returns True if it's daytime, False otherwise
-    """
-    try:
-        # Stockholm coordinates (representative for SE4)
-        location = LocationInfo("Stockholm", "Sweden", "Europe/Stockholm", 59.3293, 18.0686)
-        
-        # Get today's sun times
-        now = get_current_time()
-        s = sun(location.observer, date=now.date(), tzinfo=now.tzinfo)
-        
-        sunrise = s['sunrise']
-        sunset = s['sunset']
-        
-        # Check if current time is between sunrise and sunset
-        return sunrise <= now <= sunset
-    except Exception as e:
-        print(f"Error calculating sun position: {e}")
-        # Default to daytime hours (6 AM - 8 PM) as fallback
-        hour = get_current_time().hour
-        return 6 <= hour <= 20
-
-
-def calculate_solar_update_interval(max_daily_calls: int = 300, usage_percent: float = 0.9) -> int:
-    """
-    Calculate the optimal interval between solar API calls during daylight hours.
-    
-    Args:
-        max_daily_calls: Maximum API calls allowed per day (default: 300)
-        usage_percent: Percentage of available calls to use (default: 0.9 for 90%)
-    
-    Returns:
-        Interval in minutes between API calls
-    """
-    try:
-        # Stockholm coordinates
-        location = LocationInfo("Stockholm", "Sweden", "Europe/Stockholm", 59.3293, 18.0686)
-        
-        # Get today's sun times
-        now = get_current_time()
-        s = sun(location.observer, date=now.date(), tzinfo=now.tzinfo)
-        
-        sunrise = s['sunrise']
-        sunset = s['sunset']
-        
-        # Calculate daylight duration in minutes
-        daylight_minutes = (sunset - sunrise).total_seconds() / 60
-        
-        # Calculate allowed calls (90% of max)
-        allowed_calls = int(max_daily_calls * usage_percent)
-        
-        # Calculate interval in minutes
-        interval_minutes = daylight_minutes / allowed_calls
-        
-        # Ensure minimum interval of 5 minutes to be safe
-        interval_minutes = max(5, interval_minutes)
-        
-        print(f"Solar update interval calculated: {interval_minutes:.1f} minutes "
-              f"({allowed_calls} calls over {daylight_minutes/60:.1f} hours of daylight)")
-        
-        return int(interval_minutes)
-        
-    except Exception as e:
-        print(f"Error calculating update interval: {e}")
-        # Default to 10 minutes as fallback
-        return 10
-
 class SpotPriceDashboard:
     """Main dashboard class for managing spot price and power monitoring"""
     
-    def __init__(self):
+    def __init__(self, 
+                 data_manager: DataManager,
+                 spot_price_client: Optional[SpotPriceClient] = None,
+                 solar_client: Optional[SolarEdgeClient] = None):
+        """
+        Initialize the dashboard with dependency injection.
+        
+        Args:
+            data_manager: Centralized data manager for shared state
+            spot_price_client: Client for fetching spot prices (optional, will create if None)
+            solar_client: Client for fetching solar data (optional, will create if None)
+        """
+        # Injected dependencies
+        self.data_manager = data_manager
+        self.spot_price_client = spot_price_client or SpotPriceClient()
+        self.solar_client = solar_client
+        
         # Spot price state
         self.current_price: Optional[float] = None
         self.loading: bool = False
@@ -170,53 +103,35 @@ class SpotPriceDashboard:
         # Start background updates
         self.start_background_updates()
     
-    @classmethod
-    def get_mqtt_client(cls, dashboard_instance=None) -> Optional[MQTTPowerClient]:
-        """Get or create the MQTT client instance."""
-        global _mqtt_client_instance
-
-        if _mqtt_client_instance is None:
-            try:
-                _mqtt_client_instance = MQTTPowerClient()
-                # Set the callback to update global data
-                def callback(power: float):
-                    cls.power_update_callback_static(power, dashboard_instance)
-                _mqtt_client_instance.set_power_callback(callback)
-            except Exception as e:
-                print(f"MQTT config error: {str(e)}")
-                return None
-
-        return _mqtt_client_instance
-
-    @classmethod
-    def power_update_callback_static(cls, power: float, dashboard_instance: Optional['SpotPriceDashboard'] = None) -> None:
-        """Static callback for MQTT power updates."""
-        global _latest_power_data, _power_data_lock
-
-        # Update the global shared power data
-        with _power_data_lock:
-            _latest_power_data = {
-                'power': round(power, 2),
-                'timestamp': get_current_time()
-            }
-        print(f"MQTT received: {power}W, updated global data")
-
-        # Trigger UI update if dashboard instance is provided
-        if dashboard_instance:
-            dashboard_instance.update_power_ui()
+    def power_update_callback(self, power: float) -> None:
+        """Callback for MQTT power updates."""
+        # Update data via data manager
+        self.data_manager.update_power_data(power, get_current_time())
+        
+        # Trigger UI update
+        self.update_power_ui()
     
     def setup_mqtt(self):
         """Initialize MQTT connection"""
         try:
-            client = self.get_mqtt_client(self)  # Pass the dashboard instance
-            if client and client.connect():
-                self.mqtt_connected = True
-                self.mqtt_error = ""
-                print("MQTT connected successfully")
+            # Get or create MQTT client via data manager
+            client = self.data_manager.create_mqtt_client()
+            
+            if client:
+                # Set the callback to update this dashboard instance
+                client.set_power_callback(self.power_update_callback)
+                
+                if client.connect():
+                    self.mqtt_connected = True
+                    self.mqtt_error = ""
+                    print("MQTT connected successfully")
+                else:
+                    self.mqtt_connected = False
+                    self.mqtt_error = "Failed to connect to MQTT broker"
+                    print(f"MQTT connection failed: {self.mqtt_error}")
             else:
                 self.mqtt_connected = False
-                self.mqtt_error = "Failed to connect to MQTT broker"
-                print(f"MQTT connection failed: {self.mqtt_error}")
+                self.mqtt_error = "MQTT client not configured"
         except Exception as e:
             self.mqtt_connected = False
             self.mqtt_error = f"MQTT connection error: {str(e)}"
@@ -225,7 +140,10 @@ class SpotPriceDashboard:
     def check_solar_availability(self):
         """Check if SolarEdge configuration is available"""
         try:
-            client = SolarEdgeClient()
+            # Try to create solar client if not provided
+            if self.solar_client is None:
+                self.solar_client = SolarEdgeClient()
+            
             self.solar_available = True
             self.solar_error = ""
             print("SolarEdge configuration found")
@@ -234,20 +152,21 @@ class SpotPriceDashboard:
         except ValueError as e:
             self.solar_available = False
             self.solar_error = "SolarEdge not configured"
+            self.solar_client = None
             print(f"SolarEdge not available: {e}")
         except Exception as e:
             self.solar_available = False
             self.solar_error = f"SolarEdge error: {str(e)}"
+            self.solar_client = None
             print(f"SolarEdge exception: {e}")
     
     def fetch_solar_power(self):
         """Fetch the current solar power production"""
-        if not self.solar_available:
+        if not self.solar_available or self.solar_client is None:
             return
         
         try:
-            client = SolarEdgeClient()
-            power = client.get_current_power_production()
+            power = self.solar_client.get_current_power_production()
             if power is not None:
                 self.current_solar_power = round(power, 2)
                 self.solar_last_updated = format_timestamp(get_current_time())
@@ -265,8 +184,7 @@ class SpotPriceDashboard:
     def fetch_spot_price(self):
         """Fetch the latest spot price from the API"""
         try:
-            spot_price_client = SpotPriceClient()
-            self.current_price = spot_price_client.get_current_price()
+            self.current_price = self.spot_price_client.get_current_price()
             self.last_price_update = get_current_time()
             self.last_updated = format_timestamp(self.last_price_update)  # Update last_updated
             print(f"Spot price updated: {self.current_price} at {self.last_price_update}")
@@ -325,11 +243,8 @@ class SpotPriceDashboard:
     
     def update_power_ui(self):
         """Update the power consumption UI elements"""
-        global _latest_power_data, _power_data_lock
-        
-        # Read latest data from global variable
-        with _power_data_lock:
-            latest_data = _latest_power_data
+        # Read latest data from data manager
+        latest_data = self.data_manager.get_latest_power_data()
         
         if latest_data:
             self.current_power = latest_data['power']
@@ -414,10 +329,8 @@ class SpotPriceDashboard:
         while True:
             await asyncio.sleep(60)  # Check every 1 minute
             
-            # Get connected clients count
-            global _connected_clients
-            with _clients_lock:
-                has_clients = _connected_clients > 0
+            # Get connected clients count from data manager
+            has_clients = self.data_manager.has_connected_clients()
             
             # Recalculate solar update interval daily (at midnight or on first run)
             now = get_current_time()
@@ -513,28 +426,24 @@ class SpotPriceDashboard:
         self.start_background_updates()
 
 
-# Create the dashboard instance
-dashboard = SpotPriceDashboard()
+# Initialize data manager (singleton)
+data_manager = DataManager()
+
+# Create the dashboard instance with dependency injection
+dashboard = SpotPriceDashboard(data_manager=data_manager)
 
 @ui.page('/')
 async def index():
     """Main page with client tracking"""
-    global _connected_clients
-    
-    # Increment connected clients counter
-    with _clients_lock:
-        _connected_clients += 1
-        print(f"Client connected. Total clients: {_connected_clients}")
+    # Increment connected clients counter via data manager
+    data_manager.increment_clients()
     
     # Build the UI
     dashboard.build_ui()
     
     # Register cleanup on client disconnect
     async def on_disconnect():
-        global _connected_clients
-        with _clients_lock:
-            _connected_clients = max(0, _connected_clients - 1)
-            print(f"Client disconnected. Total clients: {_connected_clients}")
+        data_manager.decrement_clients()
     
     app.on_disconnect(on_disconnect)
 

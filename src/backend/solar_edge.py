@@ -3,6 +3,79 @@ import json
 import os
 from typing import Dict, Any, Optional
 from dotenv import load_dotenv
+from datetime import datetime
+from astral import LocationInfo
+from astral.sun import sun
+
+
+def is_sun_up() -> bool:
+    """
+    Check if the sun is currently up in Sweden (SE4 region - Stockholm area)
+    Returns True if it's daytime, False otherwise
+    """
+    try:
+        # Stockholm coordinates (representative for SE4)
+        location = LocationInfo("Stockholm", "Sweden", "Europe/Stockholm", 59.3293, 18.0686)
+        
+        # Get today's sun times
+        now = datetime.now().astimezone()
+        s = sun(location.observer, date=now.date(), tzinfo=now.tzinfo)
+        
+        sunrise = s['sunrise']
+        sunset = s['sunset']
+        
+        # Check if current time is between sunrise and sunset
+        return sunrise <= now <= sunset
+    except Exception as e:
+        print(f"Error calculating sun position: {e}")
+        # Default to daytime hours (6 AM - 8 PM) as fallback
+        hour = datetime.now().astimezone().hour
+        return 6 <= hour <= 20
+
+
+def calculate_solar_update_interval(max_daily_calls: int = 300, usage_percent: float = 0.9) -> int:
+    """
+    Calculate the optimal interval between solar API calls during daylight hours.
+    
+    Args:
+        max_daily_calls: Maximum API calls allowed per day (default: 300)
+        usage_percent: Percentage of available calls to use (default: 0.9 for 90%)
+    
+    Returns:
+        Interval in minutes between API calls
+    """
+    try:
+        # Stockholm coordinates
+        location = LocationInfo("Stockholm", "Sweden", "Europe/Stockholm", 59.3293, 18.0686)
+        
+        # Get today's sun times
+        now = datetime.now().astimezone()
+        s = sun(location.observer, date=now.date(), tzinfo=now.tzinfo)
+        
+        sunrise = s['sunrise']
+        sunset = s['sunset']
+        
+        # Calculate daylight duration in minutes
+        daylight_minutes = (sunset - sunrise).total_seconds() / 60
+        
+        # Calculate allowed calls (90% of max)
+        allowed_calls = int(max_daily_calls * usage_percent)
+        
+        # Calculate interval in minutes
+        interval_minutes = daylight_minutes / allowed_calls
+        
+        # Ensure minimum interval of 5 minutes to be safe
+        interval_minutes = max(5, interval_minutes)
+        
+        print(f"Solar update interval calculated: {interval_minutes:.1f} minutes "
+              f"({allowed_calls} calls over {daylight_minutes/60:.1f} hours of daylight)")
+        
+        return int(interval_minutes)
+        
+    except Exception as e:
+        print(f"Error calculating update interval: {e}")
+        # Default to 10 minutes as fallback
+        return 10
 
 
 class SolarEdgeClient:
@@ -90,7 +163,12 @@ class SolarEdgeClient:
         try:
             # Navigate through the JSON structure to get PV production
             site_current_power_flow = power_flow.get('siteCurrentPowerFlow', {})
-            pv_data = site_current_power_flow.get('PV', {})
+            pv_data = site_current_power_flow.get('PV')
+            
+            # If PV data is missing, return None instead of 0
+            if pv_data is None:
+                return None
+            
             current_power_kw = pv_data.get('currentPower', 0)
             
             # Convert from kW to W (API returns power in kW)
@@ -98,7 +176,7 @@ class SolarEdgeClient:
             
             return current_power_w
             
-        except (KeyError, ValueError, TypeError) as e:
+        except (KeyError, ValueError, TypeError, AttributeError) as e:
             print(f"Error parsing power production data: {e}")
             return None
 
