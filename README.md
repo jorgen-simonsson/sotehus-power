@@ -11,10 +11,13 @@ A real-time web dashboard for monitoring Swedish electricity spot prices and hou
 - **Real-Time Spot Prices**: Live electricity spot prices for all Swedish regions (SE1-SE4)
 - **Power Consumption Monitoring**: Real-time power usage via MQTT integration
 - **Solar Production Monitoring**: Real-time solar panel production via SolarEdge API
+- **Time Series Data Logging**: Continuous logging to InfluxDB2 for historical analysis
 - **Auto-Updating Interface**: UI refreshes every 3 seconds with latest data
 - **Multi-Client Support**: Clean handling of multiple browser connections without memory leaks
 - **Region Selection**: Easy switching between Swedish electricity regions
-- **Minimal Dependencies**: Simple Python-based architecture
+- **Docker Support**: Easy deployment with Docker Compose
+- **Comprehensive Testing**: 93+ tests covering all backend components
+- **Modern Architecture**: Dependency injection, singleton pattern, thread-safe operations
 
 ## 📊 Data Sources
 
@@ -165,6 +168,55 @@ GET /site/{siteId}/details.json
 - No errors shown if SolarEdge is not configured (optional feature)
 - Graceful degradation - app works fine without solar monitoring
 
+### 4. Time Series Data Storage
+
+**Database**: InfluxDB 2.x
+
+**Purpose**: Historical data storage for trend analysis and monitoring
+
+**Data Logged**:
+- Grid power consumption (Watts)
+- Electricity spot prices (SEK/kWh)
+- Solar power production (Watts)
+- Timestamps for all measurements
+
+**Features**:
+- Automatic reconnection on connection loss
+- Continuous logging independent of web clients
+- Thread-safe write operations
+- Configurable organization and bucket
+
+**Write Pattern**:
+- Triggered on every MQTT power update
+- Combines grid power with latest spot price and solar production
+- Single write operation per measurement
+- No data loss during temporary disconnections
+
+**Configuration**: Via environment variables (`.env` file)
+```bash
+INFLUXDB2_HOST=influxdb2        # Container name or hostname
+INFLUXDB2_PORT=8086             # Default InfluxDB port
+INFLUXDB2_USER=your_username
+INFLUXDB2_PASSWORD=your_password
+INFLUXDB2_ORG=sotehus           # Organization name
+INFLUXDB2_BUCKET=sotehus_bucket # Bucket name
+```
+
+**Querying Data**:
+Use the included `listinflux.py` utility to view recent records:
+```bash
+# List last 50 records
+python src/util/listinflux.py
+
+# List last 100 records
+python src/util/listinflux.py --count 100
+```
+
+**Docker Network**:
+- Runs on the same Docker network as the application
+- Container-to-container communication for reliability
+- No external network exposure required
+
 ## 🚀 Installation
 
 ### Prerequisites
@@ -190,6 +242,11 @@ GET /site/{siteId}/details.json
 3. **Install dependencies**:
    ```bash
    pip install -r requirements.txt
+   ```
+   
+   **For development** (includes testing tools):
+   ```bash
+   pip install -r requirements-dev.txt
    ```
 
 4. **Configure MQTT & SolarEdge** (optional):
@@ -273,22 +330,35 @@ The dashboard is divided into three main sections:
 ## 📁 Project Structure
 
 ```
-spot/
+sotehus-power/
 ├── src/
-│   ├── backend/                # Backend modules
-│   │   ├── spotprice.py       # Spot price API client
-│   │   ├── mqtt_client.py     # MQTT power monitoring
-│   │   ├── solar_edge.py      # SolarEdge solar production API
-│   │   └── README.md          # Module documentation
-│   └── frontend/              # Frontend web application
-│       ├── nicegui_app.py     # Main application file
-│       └── README.md          # Frontend-specific docs
+│   ├── application/           # Application layer
+│   │   ├── data_manager.py   # Centralized state management (Singleton)
+│   │   └── t_data_manager.py # Tests for data manager
+│   ├── backend/               # Backend modules
+│   │   ├── spotprice.py      # Spot price API client
+│   │   ├── mqtt_client.py    # MQTT power monitoring
+│   │   ├── solar_edge.py     # SolarEdge solar production API
+│   │   ├── influxdb2_client.py # InfluxDB2 time series database client
+│   │   ├── t_*.py            # Test files for each module
+│   │   └── README.md         # Module documentation
+│   ├── frontend/             # Frontend web application
+│   │   ├── nicegui_app.py    # Main application file
+│   │   └── README.md         # Frontend-specific docs
+│   └── util/                 # Utility scripts
+│       ├── listinflux.py     # List InfluxDB records utility
+│       └── README.md         # Utility documentation
 ├── examples/
-│   └── solar_edge_example.py  # SolarEdge usage example
-├── run_nicegui.py             # Launcher script
-├── requirements.txt           # Python dependencies
-├── .env.example               # Configuration template
-└── README.md                  # This file
+│   └── solar_edge_example.py # SolarEdge usage example
+├── tests/                    # Test directory
+├── docker-compose.yml        # Docker Compose configuration
+├── Dockerfile                # Docker image definition
+├── run_nicegui.py            # Launcher script
+├── requirements.txt          # Python dependencies
+├── requirements-dev.txt      # Development dependencies
+├── pytest.ini                # Pytest configuration
+├── .env.example              # Configuration template
+└── README.md                 # This file
 ```
 
 ## 🔧 Configuration
@@ -497,33 +567,45 @@ async def _update_loop(self):
 └──────────┬──────────┘
            │ HTTP GET
            ↓
-┌─────────────────────┐      ┌──────────────────┐
-│   SpotPriceClient   │      │  MQTT Broker     │
-│  (src/backend)      │      │                  │
-└──────────┬──────────┘      └────────┬─────────┘
-           │                          │ Subscribe
-           │                          ↓
-           │                 ┌──────────────────┐
-           │                 │  MQTTPowerClient │
-           │                 │  (src/backend)   │
-           │                 └────────┬─────────┘
-           │                          │
-           ↓                          ↓
-┌─────────────────────────────────────────────┐
-│          Global Shared State                │
-│  (_latest_power_data, spot price cache)    │
-└──────────────────┬──────────────────────────┘
+┌─────────────────────┐      ┌──────────────────┐      ┌──────────────────┐
+│   SpotPriceClient   │      │  MQTT Broker     │      │  SolarEdge API   │
+│  (src/backend)      │      │                  │      │                  │
+└──────────┬──────────┘      └────────┬─────────┘      └────────┬─────────┘
+           │                          │ Subscribe               │ HTTP GET
+           │                          ↓                         ↓
+           │                 ┌──────────────────┐      ┌──────────────────┐
+           │                 │  MQTTPowerClient │      │ SolarEdgeClient  │
+           │                 │  (src/backend)   │      │  (src/backend)   │
+           │                 └────────┬─────────┘      └────────┬─────────┘
+           │                          │                         │
+           ↓                          ↓                         ↓
+┌─────────────────────────────────────────────────────────────────────────┐
+│                          DataManager (Singleton)                        │
+│        Centralized state with dependency injection pattern              │
+│  • Spot price cache      • Grid power data      • Solar production     │
+│  • MQTT client ref       • InfluxDB client ref  • Client count         │
+└──────────────────┬────────────────────────┬─────────────────────────────┘
+                   │                        │
+                   │ On MQTT message        │ Periodic writes
+                   ↓                        ↓
+           ┌───────────────┐        ┌──────────────────┐
+           │ Write to DB:  │        │   InfluxDB2      │
+           │ • Grid power  │───────▶│  Time Series DB  │
+           │ • Spot price  │        │  (Docker)        │
+           │ • Solar prod  │        └──────────────────┘
+           └───────────────┘
                    │
                    ↓
 ┌─────────────────────────────────────────────┐
 │         Background Update Task              │
 │      (asyncio.create_task)                  │
+│        Runs continuously per client         │
 └──────────────────┬──────────────────────────┘
                    │ Every 3 seconds
                    ↓
 ┌─────────────────────────────────────────────┐
 │         NiceGUI UI Components               │
-│     (Direct label/text updates)             │
+│   (Real-time updates via WebSocket)         │
 └──────────────────┬──────────────────────────┘
                    │ HTTP/WebSocket
                    ↓
@@ -535,27 +617,94 @@ async def _update_loop(self):
 
 ### Key Components
 
-1. **SpotPriceClient** (`src/backend/spotprice.py`):
+1. **DataManager** (`src/application/data_manager.py`):
+   - Singleton pattern for centralized state management
+   - Dependency injection container for all backend services
+   - Thread-safe access with locks for all shared state
+   - Manages MQTT, InfluxDB, spot price, and solar data
+   - Automatically writes to InfluxDB when power data is received
+
+2. **SpotPriceClient** (`src/backend/spotprice.py`):
    - Fetches 15-minute interval spot prices from Swedish API
    - Returns current interval's price as float
    - Handles date formatting and region selection
 
-2. **MQTTPowerClient** (`src/backend/mqtt_client.py`):
+3. **MQTTPowerClient** (`src/backend/mqtt_client.py`):
    - Connects to MQTT broker
    - Subscribes to power consumption topic
-   - Updates global shared state on each message via callback
+   - Callbacks to DataManager on each message
+   - Triggers automatic InfluxDB writes
 
-3. **NiceGUI Dashboard** (`src/frontend/nicegui_app.py`):
+4. **SolarEdgeClient** (`src/backend/solar_edge.py`):
+   - Fetches real-time solar production data
+   - Smart API call management (sun-up detection)
+   - Calculates optimal update intervals to stay within rate limits
+
+5. **InfluxDB2Client** (`src/backend/influxdb2_client.py`):
+   - Time series database client with auto-reconnect
+   - Writes power monitoring data: grid power, spot price, solar production
+   - Runs on Docker network for container-to-container communication
+
+6. **NiceGUI Dashboard** (`src/frontend/nicegui_app.py`):
    - Single dashboard instance with UI components
    - Background asyncio task for periodic updates
-   - Direct UI manipulation (no state management layer)
-   - Simple and straightforward architecture
+   - Direct UI manipulation via dependency-injected DataManager
+   - Module-level initialization ensures continuous operation
 
-4. **Update Pattern**:
-   - Background task runs continuously
-   - Polls global state every 3 seconds
-   - Directly updates UI labels and text elements
-   - Thread-safe access with locks
+7. **Update Pattern**:
+   - MQTT message → DataManager → Immediate InfluxDB write
+   - Background task runs continuously per web client
+   - Polls DataManager state every 3 seconds
+   - Updates UI labels and text elements in real-time
+   - Thread-safe access with locks throughout
+
+## 🧪 Testing
+
+The project includes comprehensive test coverage for all backend components.
+
+### Running Tests
+
+**Run all tests**:
+```bash
+# Using virtual environment
+.venv/bin/pytest
+
+# Or if activated
+pytest
+```
+
+**Run specific test file**:
+```bash
+.venv/bin/pytest src/backend/t_influxdb2_client.py -v
+```
+
+**Run tests in Docker**:
+```bash
+docker compose run --rm sotehus-power /bin/sh -c "pip install pytest && python -m pytest src/backend/ -v"
+```
+
+### Test Coverage
+
+- **93 backend tests** covering:
+  - InfluxDB2 client (17 tests)
+  - MQTT client (47 tests)
+  - SolarEdge client (27 tests)
+  - Spot price client (20 tests)
+
+### Development Dependencies
+
+Install development tools (pytest, black, flake8, mypy):
+```bash
+pip install -r requirements-dev.txt
+```
+
+**Tools included**:
+- `pytest` - Testing framework
+- `pytest-asyncio` - Async test support
+- `pytest-mock` - Mocking utilities
+- `black` - Code formatter
+- `flake8` - Linter
+- `mypy` - Type checker
 
 ## 🐛 Troubleshooting
 
