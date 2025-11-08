@@ -87,10 +87,11 @@ class SpotPriceDashboard:
         self.solar_updated_label: Optional[ui.label] = None
         self.solar_data_container: Optional[ui.element] = None
         
-        # Initialize
-        self.setup_mqtt()
-        self.fetch_spot_price()
-        self.check_solar_availability()
+        # Initialize data collection (happens at app startup, runs continuously)
+        # These operations are independent of web client connections
+        self.setup_mqtt()  # Connects to MQTT broker for real-time power data
+        self.fetch_spot_price()  # Fetches initial spot price
+        self.check_solar_availability()  # Checks if solar monitoring is configured
         
         # Track the last update time
         self.last_price_update: Optional[datetime] = None  
@@ -100,7 +101,7 @@ class SpotPriceDashboard:
         if self.solar_available:
             self.solar_update_interval = calculate_solar_update_interval()
 
-        # Start background updates
+        # Start background updates (runs continuously, independent of web clients)
         self.start_background_updates()
     
     def power_update_callback(self, power: float) -> None:
@@ -173,6 +174,9 @@ class SpotPriceDashboard:
                 self.last_solar_update = get_current_time()  # Track update time
                 self.solar_error = ""
                 print(f"Solar power updated: {power}W")
+                
+                # Update data manager for InfluxDB logging
+                self.data_manager.update_solar_production(self.current_solar_power)
             else:
                 self.solar_error = "No solar data available"
         except Exception as e:
@@ -188,6 +192,11 @@ class SpotPriceDashboard:
             self.last_price_update = get_current_time()
             self.last_updated = format_timestamp(self.last_price_update)  # Update last_updated
             print(f"Spot price updated: {self.current_price} at {self.last_price_update}")
+            
+            # Update data manager for InfluxDB logging
+            if self.current_price is not None:
+                self.data_manager.update_spot_price(self.current_price)
+            
             self.update_price_ui()  # Ensure UI is updated
         except Exception as e:
             print(f"Error fetching spot price: {e}")
@@ -426,10 +435,27 @@ class SpotPriceDashboard:
         self.start_background_updates()
 
 
+# ============================================================================
+# Application Initialization (runs at startup, independent of web clients)
+# ============================================================================
+
 # Initialize data manager (singleton)
 data_manager = DataManager()
 
+# Initialize InfluxDB client for continuous data logging
+# This runs independently of web client connections
+try:
+    influxdb_client = data_manager.create_influxdb_client()
+    if influxdb_client and influxdb_client.is_connected():
+        print("InfluxDB integration enabled - continuous logging active")
+    else:
+        print("InfluxDB integration disabled (not configured or connection failed)")
+except Exception as e:
+    print(f"InfluxDB initialization skipped: {e}")
+
 # Create the dashboard instance with dependency injection
+# This sets up MQTT connection and background tasks that run continuously
+# regardless of whether any web clients are connected
 dashboard = SpotPriceDashboard(data_manager=data_manager)
 
 @ui.page('/')

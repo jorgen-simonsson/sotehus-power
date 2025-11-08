@@ -22,8 +22,8 @@ services:
       - /etc/timezone:/etc/timezone:ro
     restart: unless-stopped
     networks:
-      - sotehus-network
+      - sotehus
 
 networks:
-  sotehus-network:
-    driver: bridge
+  sotehus:
+    external: true
