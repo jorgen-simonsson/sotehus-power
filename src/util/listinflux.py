@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-List the last 50 records from InfluxDB
+List the last N records from InfluxDB
 
 This utility queries the InfluxDB database and displays the most recent
-50 records from the power_monitoring measurement, showing timestamp and
+records from the power_monitoring measurement, showing timestamp and
 all data fields (grid_power, spot_price, solar_production).
 
 Usage:
@@ -132,7 +132,7 @@ def list_influx_records(count: int = 50) -> None:
             client.close()
             return
         
-        print(f"{'Timestamp':<28} {'Grid Power (W)':<15} {'Spot Price (SEK/kWh)':<23} {'Solar Production (W)':<20}")
+        print(f"{'Timestamp (UTC)':<28} {'Grid Power (W)':<15} {'Spot Price (SEK/kWh)':<23} {'Solar Production (W)':<20}")
         print("=" * 110)
         
         # Display records (already sorted by time descending)
@@ -162,8 +162,69 @@ def list_influx_records(count: int = 50) -> None:
         print("=" * 110)
         print(f"\nTotal records displayed: {record_count}")
         
+        # Get database scope statistics
+        print("\n--- Database Scope ---")
+        try:
+            # Query for first record
+            first_query = f'''
+            from(bucket: "{bucket}")
+                |> range(start: 0)
+                |> filter(fn: (r) => r._measurement == "power_monitoring")
+                |> sort(columns: ["_time"])
+                |> limit(n: 1)
+            '''
+            first_result = query_api.query(first_query, org=org)
+            
+            # Query for total count
+            count_query = f'''
+            from(bucket: "{bucket}")
+                |> range(start: 0)
+                |> filter(fn: (r) => r._measurement == "power_monitoring")
+                |> filter(fn: (r) => r._field == "grid_power")
+                |> count()
+            '''
+            count_result = query_api.query(count_query, org=org)
+            
+            first_time = None
+            last_time = None
+            total_records = 0
+            
+            # Get first timestamp
+            if first_result and len(first_result) > 0:
+                for table in first_result:
+                    if len(table.records) > 0:
+                        first_time = table.records[0].values.get('_time')
+                        break
+            
+            # Get total count
+            if count_result and len(count_result) > 0:
+                for table in count_result:
+                    if len(table.records) > 0:
+                        total_records = table.records[0].values.get('_value', 0)
+                        break
+            
+            # Get last timestamp from displayed records
+            if tables and len(tables) > 0:
+                for table in tables:
+                    if len(table.records) > 0:
+                        last_time = table.records[0].values.get('_time')
+                        break
+            
+            if first_time and last_time:
+                duration = last_time - first_time
+                days = duration.total_seconds() / 86400
+                hours = (duration.total_seconds() % 86400) / 3600
+                
+                print(f"First record:  {first_time.strftime('%Y-%m-%d %H:%M:%S')} UTC")
+                print(f"Last record:   {last_time.strftime('%Y-%m-%d %H:%M:%S')} UTC")
+                print(f"Duration:      {int(days)} days, {hours:.1f} hours")
+                print(f"Total records: {total_records:,}")
+            
+        except Exception as e:
+            print(f"Could not retrieve database scope: {e}")
+        
         # Show summary statistics
-        print("\n--- Summary Statistics ---")
+        print("\n--- Summary Statistics (Displayed Records) ---")
         all_grid_power = []
         all_spot_price = []
         all_solar_production = []
