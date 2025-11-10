@@ -6,6 +6,25 @@ A real-time web dashboard for monitoring Swedish electricity spot prices and hou
 ![NiceGUI](https://img.shields.io/badge/NiceGUI-1.4+-purple)
 ![License](https://img.shields.io/badge/License-MIT-green)
 
+## 📋 Version History
+
+### Version 1.0 (2025-11-10)
+**Initial Release**
+
+- ✅ Real-time Swedish electricity spot prices (SE1-SE4 regions)
+- ✅ MQTT power consumption monitoring
+- ✅ SolarEdge solar production integration
+- ✅ InfluxDB2 time series data logging
+- ✅ Automatic reconnection and error handling
+- ✅ Docker deployment with docker-compose
+- ✅ Comprehensive test suite (93+ tests)
+- ✅ Modern architecture with dependency injection
+- ✅ Thread-safe operations and singleton patterns
+- ✅ Utility tools (listinflux.py for data inspection)
+- ✅ Smart API rate limiting for SolarEdge
+- ✅ Sun-up detection for solar monitoring
+- ✅ Timezone-aware operations (Europe/Stockholm)
+
 ## 🌟 Features
 
 - **Real-Time Spot Prices**: Live electricity spot prices for all Swedish regions (SE1-SE4)
@@ -746,9 +765,52 @@ pip install -r requirements-dev.txt
 - Change port in `nicegui_app.py`: `ui.run(port=8081)`
 - Find and stop other services using port 8080
 
+## 🐳 Docker Deployment
+
+### Building Docker Images
+
+The project includes a GitHub Action for building and publishing Docker images with version tagging.
+
+**Manual Build and Push:**
+
+1. **Update version**:
+   ```bash
+   echo "1.1" > version.txt
+   ```
+
+2. **Trigger GitHub Action**:
+   - Go to GitHub repository → Actions tab
+   - Select "Build and Push Docker Image" workflow
+   - Click "Run workflow"
+   - Choose whether to push to registry
+
+**GitHub Secrets Required**:
+- `DOCKER_USERNAME`: Your Docker Hub username
+- `DOCKER_PASSWORD`: Your Docker Hub password or access token
+
+**Image Tags**:
+- `latest` - Always points to most recent build
+- `{version}` - Specific version from version.txt (e.g., `1.0`, `1.1`)
+
+**Docker Image Labels**:
+The built images include metadata labels:
+- `org.opencontainers.image.version` - Version from version.txt
+- `org.opencontainers.image.title` - Sotehus Power Monitoring
+- `org.opencontainers.image.description` - Dashboard description
+
+**Multi-Platform Support**:
+- Images are built for both `linux/amd64` and `linux/arm64` (Raspberry Pi compatible)
+
 ## 🤝 Contributing
 
 Contributions are welcome! Please feel free to submit pull requests or open issues for bugs and feature requests.
+
+### Version Management
+
+When contributing:
+1. Update `version.txt` for releases
+2. Add entry to Version History section in README
+3. Follow semantic versioning (MAJOR.MINOR.PATCH)
 
 ## 📄 License
 

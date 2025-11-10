@@ -425,6 +425,10 @@ class SpotPriceDashboard:
                     self.solar_status_label = ui.label().classes('text-sm text-gray-600')
                     self.solar_error_label = ui.label().classes('text-sm text-red-600')
                     self.solar_updated_label = ui.label().classes('text-sm text-gray-600')
+            
+            # Version footer
+            version = self._read_version()
+            ui.label(f'v{version}').classes('text-xs text-gray-400 mt-8')
         
         # Initial UI update
         self.update_price_ui()
@@ -433,6 +437,26 @@ class SpotPriceDashboard:
         
         # Start background updates using timers
         self.start_background_updates()
+    
+    def _read_version(self) -> str:
+        """Read version from version.txt file"""
+        try:
+            from pathlib import Path
+            import os
+            # Try multiple possible locations for version.txt
+            possible_paths = [
+                Path(__file__).parent.parent.parent / 'version.txt',  # Relative to this file
+                Path('/app/version.txt'),  # Docker container location
+                Path(os.getcwd()) / 'version.txt',  # Current working directory
+            ]
+            
+            for version_file in possible_paths:
+                if version_file.exists():
+                    version = version_file.read_text().strip()
+                    return version
+        except Exception as e:
+            print(f"Could not read version: {e}")
+        return "unknown"
 
 
 # ============================================================================
